@@ -1,0 +1,56 @@
+name: Collect official California returns
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '2-57/5 * 2-30 11 *'
+    - cron: '2-57/5 * 1-11 12 *'
+    - cron: '2-57/5 0-1 12 12 *'
+    - cron: '5 2 12 12 *'
+permissions: {}
+concurrency:
+  group: california-count-collector
+  cancel-in-progress: false
+jobs:
+  collect:
+    if: github.event.schedule != '5 2 12 12 *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      id-token: write
+    steps:
+      - name: Fetch, validate, archive and read back official returns
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          const end = Date.parse('2026-12-12T02:00:00Z');
+          if (Date.now() > end) { console.log('2026 count collection is complete.'); process.exit(0); }
+          const base = 'https://california-ballot-lab.jcpowers03.chatgpt.site';
+          const endpoint = base + '/api/returns/collect';
+          const tokenUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+          tokenUrl.searchParams.set('audience', endpoint);
+          const auth = await fetch(tokenUrl, {headers: {Authorization: 'Bearer ' + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}, signal: AbortSignal.timeout(20000)});
+          if (!auth.ok) throw Error('GitHub identity request failed: ' + auth.status);
+          const {value: token} = await auth.json();
+          if (!token) throw Error('GitHub identity token missing');
+          const collected = await fetch(endpoint, {method: 'POST', headers: {'X-Returns-Scheduler-Token': token}, signal: AbortSignal.timeout(60000)});
+          const result = await collected.json();
+          console.log(JSON.stringify(result));
+          if (!collected.ok || result.status === 'failed') throw Error('Official source check failed; last verified snapshot retained');
+          const readback = await fetch(base + '/api/returns/latest', {cache: 'no-store', signal: AbortSignal.timeout(20000)});
+          if (!readback.ok) throw Error('Readback HTTP ' + readback.status);
+          const latest = await readback.json();
+          if (latest.status !== 'ok' || !latest.snapshot || Date.now() - Date.parse(latest.lastSuccess) > 300000) throw Error('Persisted snapshot was not verified');
+          if (result.snapshot && latest.snapshot.id !== result.snapshot) throw Error('Snapshot readback differs from collector result');
+          console.log(JSON.stringify({verified: true, snapshot: latest.snapshot.id, lastSuccess: latest.lastSuccess, phase: latest.snapshot.phase, counties: latest.snapshot.counties.length}));
+          JS
+  finish:
+    if: github.event.schedule == '5 2 12 12 *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Stop this scheduler after the certification-period check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT repos/jcpowers03/california-ballot-lab-collector/actions/workflows/collect.yml/disable
