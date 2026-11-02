@@ -2,9 +2,8 @@ name: Collect official California returns
 on:
   workflow_dispatch:
   schedule:
-    - cron: '2-57/5 * 2-30 11 *'
-    - cron: '2-57/5 * 1-11 12 *'
-    - cron: '2-57/5 0-1 12 12 *'
+    # Keep the trigger simple; the collector below enforces the 2026 stop date.
+    - cron: '*/5 * * * *'
     - cron: '5 2 12 12 *'
 permissions: {}
 concurrency:
